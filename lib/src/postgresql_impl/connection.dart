@@ -39,6 +39,7 @@ class ConnectionImpl implements Connection {
   int _msgType;
   int _msgLength;
   //int _secretKey;
+  int _transactionLevel = 0;
   bool _isUtcTimeZone = false;
   
   int _backendPid;
@@ -488,20 +489,38 @@ class ConnectionImpl implements Connection {
 
   Future<T> runInTransaction<T>(Future<T> operation(), [Isolation isolation = Isolation.readCommitted]) async {
 
-    var begin = 'begin';
-    if (isolation == Isolation.repeatableRead)
-      begin = 'begin; set transaction isolation level repeatable read;';
-    else if (isolation == Isolation.serializable)
-      begin = 'begin; set transaction isolation level serializable;';
+    String begin;
+    String commit;
+    String rollback;
+    if (_transactionLevel > 0) {
+      final name = 'sp$_transactionLevel';
+      begin = 'savepoint $name';
+      commit = 'release savepoint $name';
+      rollback = 'rollback to savepoint $name';
+    } else {
+      if (isolation == Isolation.repeatableRead) {
+        begin = 'begin; set transaction isolation level repeatable read;';
+      } else if (isolation == Isolation.serializable) {
+        begin = 'begin; set transaction isolation level serializable;';
+      } else {
+        begin = 'begin';
+      }
+      commit = 'commit';
+      rollback = 'rollback';
+    }
 
     try {
+      ++_transactionLevel;
       await execute(begin);
       final result = await operation();
-      await execute('commit');
+      await execute(commit);
       return result;
     } catch (_) {
-      await execute('rollback');
+      await execute(rollback);
       rethrow;
+    } finally {
+      assert(_transactionLevel > 0);
+      --_transactionLevel;
     }
   }
 
